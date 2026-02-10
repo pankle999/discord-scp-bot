@@ -15,13 +15,3 @@
     "node": ">=18.0.0"
   }
 }
-```
-
----
-
-### **Step 3: Create `.gitignore`**
-```
-node_modules/
-.env
-serviceAccountKey.json
-.DS_Store
