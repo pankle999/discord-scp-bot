@@ -11,6 +11,37 @@ admin.initializeApp({
 
 const db = admin.firestore();
 
+// Command deployment configuration
+const DEPLOY_GLOBAL = process.env.DEPLOY_GLOBAL === 'true'; // Set to 'true' in env for global
+const GUILD_ID = process.env.GUILD_ID; // Your Discord server ID for testing
+
+// Register commands
+(async () => {
+  try {
+    console.log('🔄 Registering slash commands...');
+    
+    if (DEPLOY_GLOBAL) {
+      // Global commands (takes 1 hour to update)
+      await rest.put(
+        Routes.applicationCommands(process.env.DISCORD_CLIENT_ID),
+        { body: commands }
+      );
+      console.log('✅ Global slash commands registered!');
+    } else if (GUILD_ID) {
+      // Guild-specific commands (instant update, for testing)
+      await rest.put(
+        Routes.applicationGuildCommands(process.env.DISCORD_CLIENT_ID, GUILD_ID),
+        { body: commands }
+      );
+      console.log(`✅ Guild slash commands registered for ${GUILD_ID}!`);
+    } else {
+      console.log('⚠️ No deployment mode set. Add DEPLOY_GLOBAL=true or GUILD_ID to env');
+    }
+  } catch (error) {
+    console.error('❌ Error registering commands:', error);
+  }
+})();
+
 // Initialize Discord Bot
 const client = new Client({
   intents: [
