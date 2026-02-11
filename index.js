@@ -1,5 +1,3 @@
-
-require('dotenv').config();
 const { Client, GatewayIntentBits, REST, Routes, EmbedBuilder } = require('discord.js');
 const admin = require('firebase-admin');
 
@@ -10,37 +8,6 @@ admin.initializeApp({
 });
 
 const db = admin.firestore();
-
-// Command deployment configuration
-const DEPLOY_GLOBAL = process.env.DEPLOY_GLOBAL === 'true'; // Set to 'true' in env for global
-const GUILD_ID = process.env.GUILD_ID; // Your Discord server ID for testing
-
-// Register commands
-(async () => {
-  try {
-    console.log('🔄 Registering slash commands...');
-    
-    if (DEPLOY_GLOBAL) {
-      // Global commands (takes 1 hour to update)
-      await rest.put(
-        Routes.applicationCommands(process.env.DISCORD_CLIENT_ID),
-        { body: commands }
-      );
-      console.log('✅ Global slash commands registered!');
-    } else if (GUILD_ID) {
-      // Guild-specific commands (instant update, for testing)
-      await rest.put(
-        Routes.applicationGuildCommands(process.env.DISCORD_CLIENT_ID, GUILD_ID),
-        { body: commands }
-      );
-      console.log(`✅ Guild slash commands registered for ${GUILD_ID}!`);
-    } else {
-      console.log('⚠️ No deployment mode set. Add DEPLOY_GLOBAL=true or GUILD_ID to env');
-    }
-  } catch (error) {
-    console.error('❌ Error registering commands:', error);
-  }
-})();
 
 // Initialize Discord Bot
 const client = new Client({
@@ -54,24 +21,24 @@ const client = new Client({
 const commands = [
   {
     name: 'balance',
-    description: 'View your vault balances'
+    description: 'View your bank balances'
   },
   {
-    name: 'vault',
-    description: 'View details of a specific vault',
+    name: 'bank',
+    description: 'View details of a specific bank',
     options: [{
       name: 'name',
-      description: 'Vault name',
-      type: 3, // STRING
+      description: 'Bank name',
+      type: 3,
       required: true
     }]
   },
   {
     name: 'items',
-    description: 'View items in your vault',
+    description: 'View items in your bank',
     options: [{
-      name: 'vault',
-      description: 'Vault name',
+      name: 'bank',
+      description: 'Bank name',
       type: 3,
       required: true
     }]
@@ -80,14 +47,14 @@ const commands = [
     name: 'transactions',
     description: 'View recent transactions',
     options: [{
-      name: 'vault',
-      description: 'Vault name',
+      name: 'bank',
+      description: 'Bank name',
       type: 3,
       required: true
     }, {
       name: 'limit',
       description: 'Number of transactions (default: 10)',
-      type: 4, // INTEGER
+      type: 4,
       required: false
     }]
   },
@@ -97,17 +64,34 @@ const commands = [
   }
 ];
 
+// Command deployment configuration
+const DEPLOY_GLOBAL = process.env.DEPLOY_GLOBAL === 'true';
+const GUILD_ID = process.env.GUILD_ID;
+
 // Register slash commands
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_BOT_TOKEN);
 
 (async () => {
   try {
     console.log('🔄 Registering slash commands...');
-    await rest.put(
-      Routes.applicationCommands(process.env.DISCORD_CLIENT_ID),
-      { body: commands }
-    );
-    console.log('✅ Slash commands registered!');
+    
+    if (DEPLOY_GLOBAL) {
+      await rest.put(
+        Routes.applicationCommands(process.env.DISCORD_CLIENT_ID),
+        { body: commands }
+      );
+      console.log('✅ Global slash commands registered (may take up to 1 hour)!');
+    } else if (GUILD_ID) {
+      await rest.put(
+        Routes.applicationGuildCommands(process.env.DISCORD_CLIENT_ID, GUILD_ID),
+        { body: commands }
+      );
+      console.log(`✅ Guild slash commands registered for server ${GUILD_ID}!`);
+    } else {
+      console.warn('⚠️ No DEPLOY_GLOBAL or GUILD_ID set. Commands not registered.');
+      console.warn('⚠️ Add GUILD_ID=your_server_id for testing (instant)');
+      console.warn('⚠️ Or add DEPLOY_GLOBAL=true for production (1 hour delay)');
+    }
   } catch (error) {
     console.error('❌ Error registering commands:', error);
   }
@@ -129,8 +113,8 @@ client.on('interactionCreate', async interaction => {
   try {
     if (commandName === 'balance') {
       await handleBalance(interaction);
-    } else if (commandName === 'vault') {
-      await handleVault(interaction);
+    } else if (commandName === 'bank') {
+      await handleBank(interaction);
     } else if (commandName === 'items') {
       await handleItems(interaction);
     } else if (commandName === 'transactions') {
@@ -140,10 +124,12 @@ client.on('interactionCreate', async interaction => {
     }
   } catch (error) {
     console.error('Error handling command:', error);
-    await interaction.reply({
-      content: '❌ An error occurred while processing your command.',
-      ephemeral: true
-    });
+    const errorMsg = '❌ An error occurred while processing your command.';
+    if (interaction.replied || interaction.deferred) {
+      await interaction.followUp({ content: errorMsg, ephemeral: true });
+    } else {
+      await interaction.reply({ content: errorMsg, ephemeral: true });
+    }
   }
 });
 
@@ -153,18 +139,17 @@ async function handleBalance(interaction) {
   
   const userId = interaction.user.id;
   
-  // Get user's vaults
   const banksSnapshot = await db.collection('banks')
     .where('authorizedUsers', 'array-contains', userId)
     .get();
   
   if (banksSnapshot.empty) {
-    return interaction.editReply('❌ You have no authorized vaults. Contact an administrator.');
+    return interaction.editReply('❌ You have no authorized banks. Contact an administrator.');
   }
   
   const embed = new EmbedBuilder()
     .setColor(0xCC0000)
-    .setTitle('💰 YOUR VAULTS')
+    .setTitle('💰 YOUR BANKS')
     .setDescription('**SCP FOUNDATION - FINANCIAL DATABASE**')
     .setTimestamp();
   
@@ -174,9 +159,11 @@ async function handleBalance(interaction) {
       .reduce((sum, gen) => sum + (gen.weeklyIncome || 0), 0);
     
     let value = `**Balance:** $${bank.balance.toFixed(2)}\n`;
+    value += `**Category:** ${bank.category || 'Department'}\n`;
     value += `**Items:** ${Object.keys(bank.items || {}).length} types\n`;
     if (totalIncome > 0) {
-      value += `**Income:** $${totalIncome.toFixed(2)}/week`;
+      const netIncome = totalIncome * 0.75;
+      value += `**Income:** $${netIncome.toFixed(2)}/week (after tax)`;
     }
     
     embed.addFields({ name: `🏦 ${bank.name}`, value, inline: true });
@@ -185,40 +172,38 @@ async function handleBalance(interaction) {
   await interaction.editReply({ embeds: [embed] });
 }
 
-async function handleVault(interaction) {
+async function handleBank(interaction) {
   await interaction.deferReply();
   
-  const vaultName = interaction.options.getString('name');
+  const bankName = interaction.options.getString('name');
   const userId = interaction.user.id;
   
-  // Find vault
-  const vaultSnapshot = await db.collection('banks')
-    .where('name', '==', vaultName)
+  const bankSnapshot = await db.collection('banks')
+    .where('name', '==', bankName)
     .where('authorizedUsers', 'array-contains', userId)
     .get();
   
-  if (vaultSnapshot.empty) {
-    return interaction.editReply('❌ Vault not found or access denied.');
+  if (bankSnapshot.empty) {
+    return interaction.editReply('❌ Bank not found or access denied.');
   }
   
-  const vault = vaultSnapshot.docs[0].data();
-  const vaultId = vaultSnapshot.docs[0].id;
+  const bank = bankSnapshot.docs[0].data();
+  const bankId = bankSnapshot.docs[0].id;
   
-  // Calculate totals
-  const totalIncome = Object.values(vault.generators || {})
+  const totalIncome = Object.values(bank.generators || {})
     .reduce((sum, gen) => sum + (gen.weeklyIncome || 0), 0);
-  const netIncome = totalIncome * 0.75; // After 25% tax
+  const netIncome = totalIncome * 0.75;
   
   const embed = new EmbedBuilder()
     .setColor(0xCC0000)
-    .setTitle(`🏦 VAULT: ${vault.name}`)
-    .setDescription('**[CLASSIFIED - LEVEL 4]**')
+    .setTitle(`🏦 BANK: ${bank.name}`)
+    .setDescription(`**[${bank.category || 'Department'}]**`)
     .addFields(
-      { name: '💵 Balance', value: `$${vault.balance.toFixed(2)}`, inline: true },
-      { name: '📦 Items', value: `${Object.keys(vault.items || {}).length} types`, inline: true },
-      { name: '⚙️ Generators', value: `${Object.keys(vault.generators || {}).length}`, inline: true }
+      { name: '💵 Balance', value: `$${bank.balance.toFixed(2)}`, inline: true },
+      { name: '📦 Items', value: `${Object.keys(bank.items || {}).length} types`, inline: true },
+      { name: '⚙️ Generators', value: `${Object.keys(bank.generators || {}).length}`, inline: true }
     )
-    .setFooter({ text: `Vault ID: ${vaultId.substring(0, 8)}` })
+    .setFooter({ text: `Bank ID: ${bankId.substring(0, 8)}` })
     .setTimestamp();
   
   if (totalIncome > 0) {
@@ -228,13 +213,13 @@ async function handleVault(interaction) {
     });
   }
   
-  if (vault.owner) {
-    embed.addFields({ name: '👤 Owner', value: `<@${vault.owner}>`, inline: true });
+  if (bank.owner) {
+    embed.addFields({ name: '👤 Owner', value: `<@${bank.owner}>`, inline: true });
   }
   
-  if (vault.managers && vault.managers.length > 0) {
-    const managers = vault.managers.slice(0, 3).map(m => `<@${m}>`).join(', ');
-    const extra = vault.managers.length > 3 ? `\n+${vault.managers.length - 3} more` : '';
+  if (bank.managers && bank.managers.length > 0) {
+    const managers = bank.managers.slice(0, 3).map(m => `<@${m}>`).join(', ');
+    const extra = bank.managers.length > 3 ? `\n+${bank.managers.length - 3} more` : '';
     embed.addFields({ name: '👥 Managers', value: managers + extra, inline: true });
   }
   
@@ -244,26 +229,25 @@ async function handleVault(interaction) {
 async function handleItems(interaction) {
   await interaction.deferReply();
   
-  const vaultName = interaction.options.getString('vault');
+  const bankName = interaction.options.getString('bank');
   const userId = interaction.user.id;
   
-  const vaultSnapshot = await db.collection('banks')
-    .where('name', '==', vaultName)
+  const bankSnapshot = await db.collection('banks')
+    .where('name', '==', bankName)
     .where('authorizedUsers', 'array-contains', userId)
     .get();
   
-  if (vaultSnapshot.empty) {
-    return interaction.editReply('❌ Vault not found or access denied.');
+  if (bankSnapshot.empty) {
+    return interaction.editReply('❌ Bank not found or access denied.');
   }
   
-  const vault = vaultSnapshot.docs[0].data();
-  const items = vault.items || {};
+  const bank = bankSnapshot.docs[0].data();
+  const items = bank.items || {};
   
   if (Object.keys(items).length === 0) {
     return interaction.editReply('📦 No items in storage.');
   }
   
-  // Get item details from items collection
   const itemsSnapshot = await db.collection('items').get();
   const itemDetails = {};
   itemsSnapshot.forEach(doc => {
@@ -273,21 +257,25 @@ async function handleItems(interaction) {
   
   const embed = new EmbedBuilder()
     .setColor(0xCC0000)
-    .setTitle(`📦 INVENTORY: ${vault.name}`)
+    .setTitle(`📦 INVENTORY: ${bank.name}`)
     .setDescription('**[ITEM STORAGE]**')
     .setTimestamp();
   
   let itemsList = '';
   for (const [itemName, quantity] of Object.entries(items)) {
     const details = itemDetails[itemName];
-    itemsList += `**${quantity}x ${itemName}**\n`;
+    itemsList += `**${quantity}x ${itemName}**`;
+    if (details && details.category) {
+      itemsList += ` [${details.category}]`;
+    }
+    itemsList += '\n';
     if (details && details.description) {
-      itemsList += `*${details.description.substring(0, 100)}${details.description.length > 100 ? '...' : ''}*\n`;
+      const desc = details.description.substring(0, 100);
+      itemsList += `*${desc}${details.description.length > 100 ? '...' : ''}*\n`;
     }
     itemsList += '\n';
   }
   
-  // Split into multiple fields if too long
   if (itemsList.length > 1024) {
     const chunks = itemsList.match(/[\s\S]{1,1024}/g) || [];
     chunks.forEach((chunk, i) => {
@@ -303,21 +291,21 @@ async function handleItems(interaction) {
 async function handleTransactions(interaction) {
   await interaction.deferReply();
   
-  const vaultName = interaction.options.getString('vault');
+  const bankName = interaction.options.getString('bank');
   const limit = interaction.options.getInteger('limit') || 10;
   const userId = interaction.user.id;
   
-  const vaultSnapshot = await db.collection('banks')
-    .where('name', '==', vaultName)
+  const bankSnapshot = await db.collection('banks')
+    .where('name', '==', bankName)
     .where('authorizedUsers', 'array-contains', userId)
     .get();
   
-  if (vaultSnapshot.empty) {
-    return interaction.editReply('❌ Vault not found or access denied.');
+  if (bankSnapshot.empty) {
+    return interaction.editReply('❌ Bank not found or access denied.');
   }
   
-  const vault = vaultSnapshot.docs[0].data();
-  const transactions = vault.transactions || [];
+  const bank = bankSnapshot.docs[0].data();
+  const transactions = bank.transactions || [];
   
   if (transactions.length === 0) {
     return interaction.editReply('📜 No transactions recorded.');
@@ -329,12 +317,12 @@ async function handleTransactions(interaction) {
   
   const embed = new EmbedBuilder()
     .setColor(0xCC0000)
-    .setTitle(`📜 TRANSACTION LOG: ${vault.name}`)
+    .setTitle(`📜 TRANSACTION LOG: ${bank.name}`)
     .setDescription(`**Last ${recentTransactions.length} transactions**`)
     .setTimestamp();
   
   recentTransactions.forEach(tx => {
-    const icon = tx.amount >= 0 ? '📈' : '📉';
+    const icon = (tx.type === 'credit' || tx.type === 'transfer_in' || tx.type === 'item_add') ? '📈' : '📉';
     let value = `**${tx.description}**\n`;
     value += `Date: ${tx.date}\n`;
     
@@ -353,6 +341,10 @@ async function handleTransactions(interaction) {
       value += `Items: ${itemsList}\n`;
     }
     
+    if (value.length > 1024) {
+      value = value.substring(0, 1020) + '...';
+    }
+    
     embed.addFields({ name: `${icon} Transaction`, value, inline: false });
   });
   
@@ -368,23 +360,49 @@ async function handleCatalog(interaction) {
     return interaction.editReply('📦 No items registered in catalog.');
   }
   
+  const itemsByCategory = {
+    'Paratechnology': [],
+    'Technology': [],
+    'Units': [],
+    'Misc': []
+  };
+  
+  itemsSnapshot.forEach(doc => {
+    const item = doc.data();
+    const category = item.category || 'Misc';
+    if (!itemsByCategory[category]) {
+      itemsByCategory[category] = [];
+    }
+    itemsByCategory[category].push(item);
+  });
+  
   const embed = new EmbedBuilder()
     .setColor(0xCC0000)
     .setTitle('📚 ITEM CATALOG')
     .setDescription('**SCP Foundation - Registered Items**')
     .setTimestamp();
   
-  itemsSnapshot.forEach(doc => {
-    const item = doc.data();
-    let value = '';
-    if (item.description) {
-      value = `*${item.description.substring(0, 100)}${item.description.length > 100 ? '...' : ''}*`;
-    } else {
-      value = '*No description available.*';
+  for (const [category, items] of Object.entries(itemsByCategory)) {
+    if (items.length === 0) continue;
+    
+    let categoryText = '';
+    items.slice(0, 10).forEach(item => {
+      categoryText += `**${item.name}**`;
+      if (item.description) {
+        const desc = item.description.substring(0, 50);
+        categoryText += ` - *${desc}${item.description.length > 50 ? '...' : ''}*`;
+      }
+      categoryText += '\n';
+    });
+    
+    if (items.length > 10) {
+      categoryText += `*+${items.length - 10} more items*`;
     }
     
-    embed.addFields({ name: `📦 ${item.name}`, value, inline: true });
-  });
+    if (categoryText) {
+      embed.addFields({ name: `📦 ${category}`, value: categoryText || 'None', inline: false });
+    }
+  }
   
   await interaction.editReply({ embeds: [embed] });
 }
@@ -398,6 +416,7 @@ const server = http.createServer((req, res) => {
   res.writeHead(200);
   res.end('Bot is running!');
 });
-server.listen(process.env.PORT || 3000, () => {
-  console.log(`🌐 Keep-alive server running on port ${process.env.PORT || 3000}`);
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`🌐 Keep-alive server running on port ${PORT}`);
 });
