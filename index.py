@@ -314,7 +314,7 @@ class SSUHBot(commands.Bot):
     async def setup_hook(self) -> None:
         self.add_view(BoardView())
 
-        guild_id = os.getenv("GUILD_ID")
+        guild_id = os.environ.get("GUILD_ID")
         if guild_id:
             guild = discord.Object(id=int(guild_id))
             self.tree.copy_global_to(guild=guild)
