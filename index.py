@@ -1,6 +1,8 @@
 import asyncio
 import json
 import os
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +37,21 @@ def load_dotenv_if_present() -> None:
             continue
         key, value = line.split("=", 1)
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+def run_health_server() -> None:
+    port = int(os.environ.get("PORT", 8080))
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+
+        def log_message(self, *args):
+            pass  # silence request logging
+
+    HTTPServer(("0.0.0.0", port), Handler).serve_forever()
 
 
 def empty_state() -> dict[str, Any]:
@@ -324,7 +341,6 @@ class SSUHBot(commands.Bot):
 
 
 intents = discord.Intents.default()
-intents.message_content = True
 bot = SSUHBot(command_prefix="!", intents=intents)
 
 
@@ -396,7 +412,8 @@ if __name__ == "__main__":
 
     if not token:
         raise RuntimeError(
-            "Set DISCORD_TOKEN in your environment or in outputs/.env before running."
+            "Set DISCORD_BOT_TOKEN in your environment or in outputs/.env before running."
         )
 
+    threading.Thread(target=run_health_server, daemon=True).start()
     bot.run(token)
