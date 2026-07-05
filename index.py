@@ -391,7 +391,7 @@ async def reservation_command_error(
 
 if __name__ == "__main__":
     load_dotenv_if_present()
-    token = os.getenv("DISCORD_TOKEN")
+    token = os.environ.get("DISCORD_BOT_TOKEN")
 
     if not token:
         raise RuntimeError(
