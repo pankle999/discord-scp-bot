@@ -7,8 +7,10 @@ from pathlib import Path
 from typing import Any
 
 import discord
+import firebase_admin
 from discord import app_commands
 from discord.ext import commands
+from firebase_admin import credentials, firestore
 
 
 DAYS = [
@@ -22,8 +24,16 @@ DAYS = [
 ]
 
 BACKUP_SLOTS = 3
-STATE_FILE = Path(__file__).with_name("ssuh_reservations.json")
 STATE_LOCK = asyncio.Lock()
+
+# Firestore document that stores the whole board state.
+FIRESTORE_COLLECTION = "ssuh_bot"
+FIRESTORE_DOCUMENT = "board_state"
+
+# Fallback local file, used only if Firebase isn't configured.
+STATE_FILE = Path(__file__).with_name("ssuh_reservations.json")
+
+db = None  # set up in init_firebase()
 
 
 def load_dotenv_if_present() -> None:
@@ -39,19 +49,31 @@ def load_dotenv_if_present() -> None:
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
-def run_health_server() -> None:
-    port = int(os.environ.get("PORT", 8080))
+def init_firebase() -> None:
+    """Initialize the Firebase Admin SDK using the FIREBASE_SERVICE_ACCOUNT env var.
 
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"OK")
+    FIREBASE_SERVICE_ACCOUNT should contain the full JSON contents of a
+    Firebase service account key (as a single-line string).
+    """
+    global db
 
-        def log_message(self, *args):
-            pass  # silence request logging
+    raw_credentials = os.environ.get("FIREBASE_SERVICE_ACCOUNT")
+    if not raw_credentials:
+        print("FIREBASE_SERVICE_ACCOUNT not set; falling back to local JSON file storage.")
+        return
 
-    HTTPServer(("0.0.0.0", port), Handler).serve_forever()
+    try:
+        service_account_info = json.loads(raw_credentials)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(
+            "FIREBASE_SERVICE_ACCOUNT is not valid JSON. Make sure it's the full "
+            "service account JSON pasted as a single-line string."
+        ) from error
+
+    cred = credentials.Certificate(service_account_info)
+    firebase_admin.initialize_app(cred)
+    db = firestore.client()
+    print("Firebase initialized; using Firestore for state storage.")
 
 
 def empty_state() -> dict[str, Any]:
@@ -78,6 +100,13 @@ def normalize_state(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def load_state() -> dict[str, Any]:
+    if db is not None:
+        doc = db.collection(FIRESTORE_COLLECTION).document(FIRESTORE_DOCUMENT).get()
+        if not doc.exists:
+            return empty_state()
+        return normalize_state(doc.to_dict() or {})
+
+    # Fallback: local file (won't persist across Render redeploys).
     if not STATE_FILE.exists():
         return empty_state()
 
@@ -86,8 +115,15 @@ def load_state() -> dict[str, Any]:
 
 
 def save_state(state: dict[str, Any]) -> None:
+    normalized = normalize_state(state)
+
+    if db is not None:
+        db.collection(FIRESTORE_COLLECTION).document(FIRESTORE_DOCUMENT).set(normalized)
+        return
+
+    # Fallback: local file.
     STATE_FILE.write_text(
-        json.dumps(normalize_state(state), indent=2),
+        json.dumps(normalized, indent=2),
         encoding="utf-8",
     )
 
@@ -406,10 +442,26 @@ async def reservation_command_error(
         await interaction.response.send_message(message, ephemeral=True)
 
 
+def run_health_server() -> None:
+    port = int(os.environ.get("PORT", 8080))
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+
+        def log_message(self, *args):
+            pass  # silence request logging
+
+    HTTPServer(("0.0.0.0", port), Handler).serve_forever()
+
+
 if __name__ == "__main__":
     load_dotenv_if_present()
-    token = os.environ.get("DISCORD_BOT_TOKEN")
+    init_firebase()
 
+    token = os.environ.get("DISCORD_BOT_TOKEN")
     if not token:
         raise RuntimeError(
             "Set DISCORD_BOT_TOKEN in your environment or in outputs/.env before running."
