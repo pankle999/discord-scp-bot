@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import threading
 import time
@@ -472,7 +473,7 @@ def run_bot_with_backoff(token: str) -> None:
 
     while True:
         try:
-            bot.run(token)
+            bot.run(token, log_handler=None)
             # bot.run() only returns after a clean shutdown (e.g. bot.close()).
             # Treat that as intentional and stop the loop.
             return
@@ -505,9 +506,26 @@ def run_bot_with_backoff(token: str) -> None:
             delay_seconds = min(delay_seconds * 2, max_delay_seconds)
 
 
+def setup_logging_once() -> None:
+    """Configure logging a single time, since bot.run() is called repeatedly
+    by the backoff loop and would otherwise re-add duplicate handlers."""
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter(
+        "[{asctime}] [{levelname:<8}] {name}: {message}",
+        "%Y-%m-%d %H:%M:%S",
+        style="{",
+    )
+    handler.setFormatter(formatter)
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    root_logger.addHandler(handler)
+
+
 if __name__ == "__main__":
     load_dotenv_if_present()
     init_firebase()
+    setup_logging_once()
 
     token = os.environ.get("DISCORD_BOT_TOKEN")
     if not token:
