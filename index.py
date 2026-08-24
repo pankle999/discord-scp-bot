@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
@@ -457,6 +458,53 @@ def run_health_server() -> None:
     HTTPServer(("0.0.0.0", port), Handler).serve_forever()
 
 
+def run_bot_with_backoff(token: str) -> None:
+    """Run the bot, backing off with increasing delay on login failures.
+
+    Discord's login rate limit (HTTP 429 on /users/@me) can be triggered by
+    factors outside our control (e.g. shared-host IP throttling). If Render
+    just restarts the process immediately after a crash, we hammer the login
+    endpoint again and again, which extends the block instead of letting it
+    clear. This loop waits it out with exponential backoff instead.
+    """
+    delay_seconds = 60  # start at 1 minute
+    max_delay_seconds = 30 * 60  # cap at 30 minutes
+
+    while True:
+        try:
+            bot.run(token)
+            # bot.run() only returns after a clean shutdown (e.g. bot.close()).
+            # Treat that as intentional and stop the loop.
+            return
+        except discord.errors.LoginFailure:
+            # Bad/revoked token - retrying won't help, fail loudly instead of looping.
+            print(
+                "Login failed: the token was rejected (invalid or reset). "
+                "Fix DISCORD_BOT_TOKEN and redeploy - not retrying."
+            )
+            raise
+        except discord.errors.HTTPException as error:
+            if getattr(error, "status", None) == 429:
+                print(
+                    f"Hit Discord's rate limit while logging in. "
+                    f"Waiting {delay_seconds}s before retrying..."
+                )
+            else:
+                print(
+                    f"Discord HTTP error during startup: {error}. "
+                    f"Waiting {delay_seconds}s before retrying..."
+                )
+            time.sleep(delay_seconds)
+            delay_seconds = min(delay_seconds * 2, max_delay_seconds)
+        except Exception as error:  # noqa: BLE001 - last resort, keep the loop alive
+            print(
+                f"Unexpected error during startup: {error}. "
+                f"Waiting {delay_seconds}s before retrying..."
+            )
+            time.sleep(delay_seconds)
+            delay_seconds = min(delay_seconds * 2, max_delay_seconds)
+
+
 if __name__ == "__main__":
     load_dotenv_if_present()
     init_firebase()
@@ -468,4 +516,4 @@ if __name__ == "__main__":
         )
 
     threading.Thread(target=run_health_server, daemon=True).start()
-    bot.run(token)
+    run_bot_with_backoff(token)
